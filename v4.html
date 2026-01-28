@@ -1,0 +1,2121 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Water Sort 求解器（先整理已知、停下讓你手動、再處理?）</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 20px; line-height: 1.55; }
+    .panel { border: 1px solid #ddd; padding: 12px; border-radius: 10px; margin: 12px 0; }
+    .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+    label { font-weight: 700; }
+    input[type="number"], input[type="text"] { padding: 8px; font-size: 14px; }
+    button { padding: 8px 12px; font-size: 14px; cursor: pointer; }
+    .hint { color: #555; font-size: 13px; margin-top: 6px; }
+    .error { color: #b00020; font-weight: 700; margin-top: 10px; }
+    .ok { color: #0a7a2f; font-weight: 700; margin-top: 10px; }
+    .small { font-size: 12px; color:#555; }
+    .badge { display:inline-block; border:1px solid #ccc; border-radius:999px; padding:2px 8px; font-size:12px; margin-left:8px; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+
+    /* ====== Palette ====== */
+    .palette { display:flex; flex-wrap:wrap; gap:8px; margin-top:8px; }
+    .swatch {
+      display:flex; align-items:center; gap:8px;
+      border:1px solid #ccc; border-radius:10px;
+      padding:6px 10px; cursor:pointer; user-select:none;
+      background:#fff;
+    }
+    .swatch .dot { width:16px; height:16px; border-radius:4px; border:1px solid rgba(0,0,0,.25); }
+    .swatch.active { outline: 3px solid rgba(52, 152, 219, .35); border-color:#3498db; }
+    .swatch.empty .dot { background: repeating-linear-gradient(45deg, #fff, #fff 4px, #eee 4px, #eee 8px); }
+
+    /* ====== Board ====== */
+    .board-wrap { overflow-x:auto; }
+    .board { display:flex; gap:14px; align-items:flex-end; padding: 8px 2px; }
+    .bottle { display:flex; flex-direction:column; align-items:center; gap:6px; }
+    .tube {
+      width: 54px;
+      padding: 8px 6px;
+      border: 2px solid #bbb;
+      border-bottom-width: 6px;
+      border-radius: 18px 18px 12px 12px;
+      background: #ccc;
+      display:flex;
+      flex-direction: column-reverse; /* level0 在最底下 */
+      gap: 4px;
+    }
+    .cell {
+      width: 40px;
+      height: 18px;
+      border-radius: 6px;
+      border: 1px solid rgba(0,0,0,100);
+      background: transparent;
+      cursor: pointer;
+
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      font-weight:700;
+      font-size:12px;
+      user-select:none;
+    }
+    .cell.readonly { cursor: default; }
+    .cell.hidden {
+      background: repeating-linear-gradient(45deg, #f7f7f7, #f7f7f7 4px, #e9e9e9 4px, #e9e9e9 8px);
+      color:#444;
+    }
+    .cell.reveal-target { outline: 3px solid rgba(52, 152, 219, .35); }
+    .bottle-label { font-size: 12px; color:#333; }
+
+    /* highlight src/dst during playback (solver move) */
+    .bottle.hl-src .tube { outline: 4px solid rgba(231, 76, 60, .25); border-color:#e74c3c; }
+    .bottle.hl-dst .tube { outline: 4px solid rgba(46, 204, 113, .25); border-color:#2ecc71; }
+
+    /* manual selection */
+    .bottle.sel-src .tube { outline: 4px solid rgba(52, 152, 219, .35); border-color:#3498db; }
+
+    /* ====== Steps list ====== */
+    .steps {
+      display:grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap:14px;
+      align-items:start;
+    }
+    @media (max-width: 760px) { .steps { grid-template-columns: 1fr; } }
+
+    .step-card {
+      border:1px solid #ddd; border-radius:10px; padding:10px;
+      background:#fff;
+      width:auto;
+    }
+    .step-title { font-weight:700; margin-bottom:6px; }
+    .step-title .tag { font-weight:500; margin-left:8px; color:#555; }
+    .step-card button { padding:6px 10px; font-size:13px; }
+    .divider { height:1px; background:#eee; margin:10px 0; }
+
+    /* playback */
+    .playback { display:flex; flex-wrap:wrap; gap:10px; align-items:center; }
+    input[type="range"] { width: min(520px, 100%); }
+
+    .bottle-tools { display:flex; gap:8px; align-items:center; }
+    .bottle-tools label { font-weight:500; font-size:12px; color:#444; display:flex; gap:6px; align-items:center; }
+
+    /* inference */
+    .infer-grid { display:grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap:12px; }
+    @media (max-width: 760px) { .infer-grid { grid-template-columns: 1fr; } }
+    .infer-card { border:1px solid #eee; border-radius:10px; padding:10px; background:#fafafa; }
+    .infer-card .k { font-weight:700; margin-bottom:6px; }
+    .infer-card .v { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size:12px; }
+    .muted { color:#777; }
+  </style>
+</head>
+<body>
+  <h1>Water Sort 求解器（先整理已知、停下讓你手動、再處理 ?）</h1>
+
+  <div class="panel">
+    <div class="row">
+      <label for="nBottles">水瓶數量 n：</label>
+      <input id="nBottles" type="number" min="1" step="1" value="5"/>
+      <label for="cap">容量：</label>
+      <input id="cap" type="number" min="1" step="1" value="4"/>
+      <button id="buildBtn" type="button">建立水瓶</button>
+    </div>
+
+    <div class="row" style="margin-top:10px;">
+      <label class="row" style="font-weight:500; gap:6px;">
+        <input id="pruneEmptySym" type="checkbox" checked/>
+        剪枝：空瓶對稱（加速）
+      </label>
+      <label class="row" style="font-weight:500; gap:6px;">
+        <input id="avoidReverse" type="checkbox" checked/>
+        剪枝：避免立刻倒回去
+      </label>
+      <label class="row" style="font-weight:500; gap:6px;">
+        <input id="preArrangeKnown" type="checkbox" checked/>
+        只先整理「完全已知」的瓶子（✅不碰含 ? 的瓶子）
+      </label>
+      <label class="row" style="font-weight:500; gap:6px;">
+        <input id="autoSolveHidden" type="checkbox"/>
+        整理後自動開始處理 ?（不勾=整理完就停）
+      </label>
+    </div>
+
+    <div class="hint">
+      你要的模式：按「求解」只做整理，整理完會停下來。<br/>
+      你可以手動倒水 + 同時按「推斷隱藏」算可能方案；覺得可以了再按「開始處理 ? 瓶子」。
+    </div>
+  </div>
+
+  <div id="inputsPanel" class="panel" style="display:none;">
+    <h2 style="margin-top:0;">關卡輸入（點方塊填色）</h2>
+
+    <div>
+      <div class="small">選擇要填的顏色：</div>
+      <div id="palette" class="palette"></div>
+      <div class="hint">「空白」清除格子；「?（未知）」會放入 ?。</div>
+    </div>
+
+    <div class="divider"></div>
+
+    <div class="board-wrap">
+      <div id="inputBoard" class="board"></div>
+    </div>
+
+    <div class="row" style="margin-top:12px;">
+      <button id="solveBtn" type="button">求解</button>
+      <button id="inferBtn" type="button">推斷隱藏（列出所有可行方案）</button>
+      <button id="clearBtn" type="button">清空全部</button>
+      <button id="loadExampleBtn" type="button">載入範例</button>
+    </div>
+
+    <div id="msg" style="display:none;"></div>
+    <div id="error" class="error" style="display:none;"></div>
+  </div>
+
+  <div id="resultPanel" class="panel" style="display:none;">
+    <h2 style="margin-top:0;">求解結果</h2>
+    <div id="resultMeta" class="small"></div>
+
+    <div id="inferPanel" style="display:none;">
+      <div class="divider"></div>
+      <h3 style="margin:0 0 8px 0;">隱藏推斷（可行方案）</h3>
+
+      <div id="inferMeta" class="small" style="margin-top:10px;"></div>
+      <div class="divider"></div>
+      <div class="small">每個 ? 格的「可能 / 不可能」顏色（以本次推斷實際用到的顏色為範圍）</div>
+      <div id="inferImpossible" class="infer-grid" style="margin-top:8px;"></div>
+
+      <div class="divider"></div>
+      <div class="small">可行方案清單（選一個套用後直接求解）</div>
+      <div id="inferSolutions" class="steps" style="margin-top:8px;"></div>
+    </div>
+
+    <div class="divider"></div>
+
+    <h3 style="margin:0 0 8px 0;">播放 / 手動</h3>
+    <div class="playback">
+      <button id="prevBtn" type="button">上一步</button>
+      <button id="playBtn" type="button">播放</button>
+      <button id="nextBtn" type="button">下一步</button>
+
+      <button id="continueBtn" type="button" style="display:none;">繼續</button>
+
+      <span id="stepLabel" class="badge">Step 0</span>
+      <input id="stepRange" type="range" min="0" max="0" value="0"/>
+    </div>
+
+    <div class="row" style="margin-top:8px;">
+      <label class="small" style="display:flex; gap:8px; align-items:center;">
+        <input id="manualPour" type="checkbox" />
+        手動倒水模式（點兩個瓶：來源 → 目標）
+      </label>
+    </div>
+
+    <div id="playMoveText" class="hint"></div>
+    <div id="bestMovePanel" style="display:none;">
+      <div class="divider"></div>
+      <h3 style="margin:0 0 8px 0;">推薦下一步（最不容易死路）</h3>
+
+      <div class="row">
+        <button id="bestMoveBtn" type="button">重新計算推薦</button>
+        <span id="bestMoveText" class="small muted"></span>
+      </div>
+
+      <div id="bestMoveList" class="infer-grid" style="margin-top:10px;"></div>
+    </div>
+
+    <div class="small" style="margin-top:8px;">快速選色（補填 ? 用）</div>
+    <div id="palettePlay" class="palette"></div>
+
+    <label class="small" style="display:flex; gap:8px; align-items:center; margin-top:8px;">
+      <input id="editAnyHidden" type="checkbox" checked />
+      可在任意步驟點任何 ? 補填（會同步整條時間線）
+    </label>
+
+    <label class="small" style="display:flex; gap:8px; align-items:center; margin-top:6px;">
+      <input id="restrictToPossible" type="checkbox" checked />
+      限制只能填「推斷仍可能」的顏色（避免死路）
+    </label>
+
+    <div class="board-wrap">
+      <div id="playBoard" class="board"></div>
+    </div>
+
+    <div class="divider"></div>
+
+    <h3 style="margin:0 0 8px 0;">每一步狀態（清單）</h3>
+    <div id="stepsList" class="steps"></div>
+  </div>
+
+<script>
+/* ===========================
+   顏色設定（token -> css color）
+   ✅ 沒有紅色 R
+=========================== */
+const PALETTE_ITEMS = [
+  { token:"W", name: "白", color: "#FFFFFF" },
+  { token:"P", name: "粉", color: "#FF6082" },
+  { token:"O", name: "橙", color: "#DD6C16" },
+  { token:"B", name: "藍", color: "#6DABF2" },
+  { token:"Y", name: "黃", color: "#E9C42A" },
+  { token:"G", name: "綠", color: "#99C517" },
+  { token:"C", name: "青綠", color: "#3BDDAC" },
+  { token:"V", name: "紫", color: "#A222FA" },
+  { token:"I" , name: "靛藍", color: "#223190"},
+  { token:"R", name: "橘紅", color: "#E43C13" },
+  { token:"M", name: "墨綠",  color: "#4D702F" },
+
+];
+const TOKEN_TO_COLOR = new Map(PALETTE_ITEMS.map(x => [x.token, x.color]));
+const ALL_TOKENS = PALETTE_ITEMS.map(x => x.token);
+const SPECIAL_HIDDEN = "__H__"; // 輸入色盤用：?（未知）
+
+/* ====== Hidden token helpers ====== */
+const HIDDEN_PREFIX = "?";
+function makeHiddenToken(bottleIdx, level) { return `${HIDDEN_PREFIX}${bottleIdx}_${level}`; }
+function isHiddenToken(tok) { return typeof tok === "string" && tok.startsWith(HIDDEN_PREFIX); }
+function stateHasHidden(state) {
+  for (const tube of state) for (const tok of tube) if (isHiddenToken(tok)) return true;
+  return false;
+}
+function tubeHasHidden(tube) {
+  for (const tok of tube) if (isHiddenToken(tok)) return true;
+  return false;
+}
+function hasExposedHidden(state) {
+  for (const tube of state) {
+    if (!tube.length) continue;
+    if (isHiddenToken(tube[tube.length - 1])) return true;
+  }
+  return false;
+}
+function parseHiddenToken(tok) {
+  const s = tok.slice(1);
+  const [b, lvl] = s.split("_").map(x => Number(x));
+  return { bottle: b, level: lvl };
+}
+
+/* ===========================
+   小工具
+=========================== */
+function cloneState(s) { return s.map(t => t.slice()); }
+function countEmptyBottles(s) {
+  let c = 0;
+  for (const t of s) if (!t.length) c++;
+  return c;
+}
+
+/* ===========================
+   Priority Queue (min-heap) with lexicographic compare
+   item: [f, h, negAmt, g, state, lastMove]
+=========================== */
+class MinHeap {
+  constructor(cmp) { this.a = []; this.cmp = cmp; }
+  push(item) { this.a.push(item); this._up(this.a.length - 1); }
+  pop() {
+    if (!this.a.length) return null;
+    const top = this.a[0];
+    const last = this.a.pop();
+    if (this.a.length) { this.a[0] = last; this._down(0); }
+    return top;
+  }
+  get size() { return this.a.length; }
+  _up(i) {
+    while (i > 0) {
+      const p = (i - 1) >> 1;
+      if (this.cmp(this.a[p], this.a[i]) <= 0) break;
+      [this.a[p], this.a[i]] = [this.a[i], this.a[p]];
+      i = p;
+    }
+  }
+  _down(i) {
+    const n = this.a.length;
+    while (true) {
+      let l = i * 2 + 1, r = l + 1, s = i;
+      if (l < n && this.cmp(this.a[l], this.a[s]) < 0) s = l;
+      if (r < n && this.cmp(this.a[r], this.a[s]) < 0) s = r;
+      if (s === i) break;
+      [this.a[s], this.a[i]] = [this.a[i], this.a[s]];
+      i = s;
+    }
+  }
+}
+function lexCmp(a, b) {
+  for (let i = 0; i < Math.min(a.length, b.length); i++) {
+    if (a[i] < b[i]) return -1;
+    if (a[i] > b[i]) return 1;
+  }
+  return a.length - b.length;
+}
+
+/* ===========================
+   Water Sort Solver (A*)
+   state: Array<Array<string>>  // 每瓶：底->頂
+=========================== */
+function isUniform(tube) {
+  if (tube.length <= 1) return true;
+  const c = tube[0];
+  for (let i = 1; i < tube.length; i++) if (tube[i] !== c) return false;
+  return true;
+}
+function transitionsCount(tube) {
+  if (tube.length <= 1) return 0;
+  let c = 0;
+  for (let i = 1; i < tube.length; i++) if (tube[i] !== tube[i-1]) c++;
+  return c;
+}
+function isSolved(state, cap) {
+  if (stateHasHidden(state)) return false;
+  for (const tube of state) {
+    if (tube.length === 0) continue;
+    if (tube.length !== cap) return false;
+    if (!isUniform(tube)) return false;
+  }
+  return true;
+}
+function heuristic(state, cap) {
+  let h = 0;
+  for (const tube of state) {
+    if (tube.length === 0) continue;
+    if (tube.length === cap && isUniform(tube)) continue;
+    h += transitionsCount(tube);
+    if (!isUniform(tube)) h += 1;
+    h += Math.max(0, (cap - tube.length)) * 0.15;
+  }
+  return h;
+}
+function topColor(tube) { return tube.length ? tube[tube.length - 1] : null; }
+function canPour(src, dst, cap) {
+  if (!src.length) return false;
+  if (dst.length >= cap) return false;
+
+  const sc = topColor(src);
+  const dc = topColor(dst);
+
+  // 頂層未知 => 不倒
+  if (isHiddenToken(sc) || isHiddenToken(dc)) return false;
+  return (dc === null) || (dc === sc);
+}
+function pour(src, dst, cap) {
+  const sc = src[src.length - 1];
+  if (isHiddenToken(sc)) return null;
+
+  let k = 1;
+  for (let i = src.length - 2; i >= 0; i--) {
+    if (src[i] === sc) k++;
+    else break;
+  }
+  const space = cap - dst.length;
+  const amt = Math.min(k, space);
+  if (amt <= 0) return null;
+  const newSrc = src.slice(0, src.length - amt);
+  const newDst = dst.concat(Array(amt).fill(sc));
+  return { newSrc, newDst, amt };
+}
+function hashState(state) {
+  return state.map(t => (t.length ? t.join(",") : "_")).join("|");
+}
+
+/* ====== 避免「有隱藏」時第一步直接倒空瓶（若有其它可倒） ====== */
+function hasAnyNonEmptyPour(state, cap) {
+  const n = state.length;
+  for (let i = 0; i < n; i++) {
+    const src = state[i];
+    if (!src.length) continue;
+    const sc = topColor(src);
+    if (isHiddenToken(sc)) continue;
+    for (let j = 0; j < n; j++) {
+      if (i === j) continue;
+      const dst = state[j];
+      if (dst.length === 0) continue;
+      if (canPour(src, dst, cap)) return true;
+    }
+  }
+  return false;
+}
+
+/* ====== A* (goal 版本) ====== */
+function solveAStarGoal(initialState, cap, opts, goalFn, hFn) {
+  const {
+    maxExpansions = 1200000,
+    pruneEmptySym = true,
+    avoidReverse = true
+  } = opts || {};
+
+  if (goalFn(initialState, cap)) return { moves: [], expansions: 0 };
+
+  const startKey = hashState(initialState);
+
+  const open = new MinHeap(lexCmp);
+  const gBest = new Map();
+  const cameFrom = new Map();
+
+  const h0 = hFn ? hFn(initialState, cap) : 0;
+  open.push([h0, h0, 0, 0, initialState, null]);
+  gBest.set(startKey, 0);
+  cameFrom.set(startKey, { prevKey: null, move: null });
+
+  let expansions = 0;
+
+  while (open.size) {
+    const [f, h, negAmt, g, state, lastMove] = open.pop();
+    const key = hashState(state);
+    if (g !== gBest.get(key)) continue;
+
+    if (goalFn(state, cap)) {
+      const moves = [];
+      let curKey = key;
+      while (true) {
+        const rec = cameFrom.get(curKey);
+        if (!rec || !rec.prevKey || !rec.move) break;
+        moves.push(rec.move);
+        curKey = rec.prevKey;
+      }
+      moves.reverse();
+      return { moves, expansions };
+    }
+
+    expansions++;
+    if (expansions > maxExpansions) {
+      return { moves: null, expansions, reason: "超過搜尋上限（maxExpansions）" };
+    }
+
+    const banEmptyAtFirstMove =
+      stateHasHidden(state) && g === 0 && hasAnyNonEmptyPour(state, cap);
+
+    let firstEmpty = -1;
+    if (pruneEmptySym) {
+      for (let i = 0; i < state.length; i++) {
+        if (state[i].length === 0) { firstEmpty = i; break; }
+      }
+    }
+
+    const n = state.length;
+    for (let i = 0; i < n; i++) {
+      const src = state[i];
+      if (!src.length) continue;
+
+      const srcSolvedFull = (!stateHasHidden([src]) && src.length === cap && isUniform(src));
+
+      for (let j = 0; j < n; j++) {
+        if (i === j) continue;
+        const dst = state[j];
+
+        if (!canPour(src, dst, cap)) continue;
+        if (banEmptyAtFirstMove && dst.length === 0) continue;
+        if (pruneEmptySym && dst.length === 0 && firstEmpty !== -1 && j !== firstEmpty) continue;
+        if (avoidReverse && lastMove && lastMove.src === j && lastMove.dst === i) continue;
+        if (srcSolvedFull && dst.length === 0) continue;
+
+        const res = pour(src, dst, cap);
+        if (!res) continue;
+
+        const newState = state.map(t => t.slice());
+        newState[i] = res.newSrc;
+        newState[j] = res.newDst;
+
+        const newKey = hashState(newState);
+        const ng = g + 1;
+        const best = gBest.get(newKey);
+        if (best === undefined || ng < best) {
+          gBest.set(newKey, ng);
+          cameFrom.set(newKey, { prevKey: key, move: { type:"pour", src: i, dst: j, amt: res.amt } });
+
+          const nh = hFn ? hFn(newState, cap) : 0;
+          const nf = ng + nh;
+
+          open.push([nf, nh, -res.amt, ng, newState, { src: i, dst: j }]);
+        }
+      }
+    }
+  }
+
+  return { moves: null, expansions, reason: "找不到解（可能無解或剪枝/限制導致）" };
+}
+
+function solveAStar(initialState, cap, opts) {
+  return solveAStarGoal(
+    initialState,
+    cap,
+    opts,
+    (s, c) => isSolved(s, c),
+    (s, c) => heuristic(s, c)
+  );
+}
+
+/* ===========================
+   ✅ 整理階段：只整理「完全不含 ? 的瓶子」
+   - 含 ? 的瓶子：整理階段完全不作為 src/dst
+=========================== */
+function scorePreArrangeMove(before, after, cap, i, j, amt) {
+  let s = 0;
+  const bSrc = before[i], bDst = before[j];
+  const aSrc = after[i],  aDst = after[j];
+
+  if (aSrc.length === 0) s += 240;
+  if (bDst.length && topColor(bDst) === topColor(bSrc)) s += 90;
+  if (aDst.length === cap && isUniform(aDst)) s += 140;
+
+  const deltaTrans =
+    (transitionsCount(bSrc) + transitionsCount(bDst)) -
+    (transitionsCount(aSrc) + transitionsCount(aDst));
+  s += deltaTrans * 30;
+
+  s += amt * 5;
+  if (!isUniform(bSrc)) s += 10;
+  if (bDst.length === 0) s += 8;
+
+  return s;
+}
+function pickWeightedTop(cands, topK = 8) {
+  const arr = cands.slice(0, Math.min(topK, cands.length));
+  let min = Infinity;
+  for (const c of arr) min = Math.min(min, c.score);
+  const w = arr.map(c => {
+    const x = (c.score - min + 1);
+    return x * x;
+  });
+  const sum = w.reduce((a,b)=>a+b,0);
+  let r = Math.random() * sum;
+  for (let i = 0; i < arr.length; i++) {
+    r -= w[i];
+    if (r <= 0) return arr[i];
+  }
+  return arr[arr.length - 1];
+}
+
+function preArrangeKnown(initialState, cap, opts = {}) {
+  const maxSteps = opts.maxSteps ?? 240;
+  const avoidReverse = opts.avoidReverse ?? true;
+  const randomPick = opts.randomPick ?? true;
+
+  let state = cloneState(initialState);
+  let moves = [];
+  let lastMove = null;
+
+  let bestState = cloneState(state);
+  let bestMoves = [];
+  let bestMetric = countEmptyBottles(state) * 1000 - heuristic(state, cap) * 10;
+
+  const seen = new Set([hashState(state)]);
+  let stagnation = 0;
+
+  for (let step = 0; step < maxSteps; step++) {
+    const n = state.length;
+    const cands = [];
+
+    for (let i = 0; i < n; i++) {
+      const src = state[i];
+      if (!src.length) continue;
+
+      // ✅ 整理階段：含 ? 的瓶子完全不碰（src）
+      if (tubeHasHidden(src)) continue;
+      if (isHiddenToken(topColor(src))) continue;
+
+      for (let j = 0; j < n; j++) {
+        if (i === j) continue;
+        if (avoidReverse && lastMove && lastMove.src === j && lastMove.dst === i) continue;
+
+        const dst = state[j];
+
+        // ✅ 整理階段：含 ? 的瓶子完全不碰（dst）
+        if (tubeHasHidden(dst)) continue;
+
+        if (!canPour(src, dst, cap)) continue;
+
+        const res = pour(src, dst, cap);
+        if (!res) continue;
+
+        const srcSolvedFull = (!stateHasHidden([src]) && src.length === cap && isUniform(src));
+        if (srcSolvedFull && dst.length === 0) continue;
+
+        const newState = state.map(t => t.slice());
+        newState[i] = res.newSrc;
+        newState[j] = res.newDst;
+
+        const key = hashState(newState);
+        if (seen.has(key)) continue;
+
+        const score = scorePreArrangeMove(state, newState, cap, i, j, res.amt);
+        cands.push({ score, i, j, amt: res.amt, newState, key });
+      }
+    }
+
+    if (!cands.length) break;
+
+    cands.sort((a,b)=>b.score - a.score);
+    const pick = randomPick ? pickWeightedTop(cands, 8) : cands[0];
+
+    state = pick.newState;
+    moves.push({ type:"pour", src: pick.i, dst: pick.j, amt: pick.amt });
+    lastMove = { src: pick.i, dst: pick.j };
+    seen.add(pick.key);
+
+    const metric = countEmptyBottles(state) * 1000 - heuristic(state, cap) * 10;
+    if (metric > bestMetric) {
+      bestMetric = metric;
+      bestState = cloneState(state);
+      bestMoves = moves.slice();
+      stagnation = 0;
+    } else {
+      stagnation++;
+      if (stagnation >= 35) break;
+    }
+  }
+
+  return { state: bestState, moves: bestMoves };
+}
+
+/* ===========================
+   UI
+=========================== */
+const nBottlesEl = document.getElementById("nBottles");
+const capEl = document.getElementById("cap");
+const buildBtn = document.getElementById("buildBtn");
+const inputsPanel = document.getElementById("inputsPanel");
+
+const paletteEl = document.getElementById("palette");
+const palettePlayEl = document.getElementById("palettePlay");
+const inputBoardEl = document.getElementById("inputBoard");
+
+const solveBtn = document.getElementById("solveBtn");
+const inferBtn = document.getElementById("inferBtn");
+const clearBtn = document.getElementById("clearBtn");
+const loadExampleBtn = document.getElementById("loadExampleBtn");
+const msgEl = document.getElementById("msg");
+const errorEl = document.getElementById("error");
+
+const pruneEmptySymEl = document.getElementById("pruneEmptySym");
+const avoidReverseEl = document.getElementById("avoidReverse");
+const preArrangeKnownEl = document.getElementById("preArrangeKnown");
+const autoSolveHiddenEl = document.getElementById("autoSolveHidden");
+const bestMovePanel = document.getElementById("bestMovePanel");
+
+const resultPanel = document.getElementById("resultPanel");
+const resultMeta = document.getElementById("resultMeta");
+
+const inferPanel = document.getElementById("inferPanel");
+const inferMeta = document.getElementById("inferMeta");
+const inferImpossibleEl = document.getElementById("inferImpossible");
+const inferSolutionsEl = document.getElementById("inferSolutions");
+
+const bestMoveBtn = document.getElementById("bestMoveBtn");
+const bestMoveText = document.getElementById("bestMoveText");
+const bestMoveList = document.getElementById("bestMoveList");
+
+const stepsListEl = document.getElementById("stepsList");
+const playBoardEl = document.getElementById("playBoard");
+const prevBtn = document.getElementById("prevBtn");
+const nextBtn = document.getElementById("nextBtn");
+const playBtn = document.getElementById("playBtn");
+const continueBtn = document.getElementById("continueBtn");
+const stepLabel = document.getElementById("stepLabel");
+const stepRange = document.getElementById("stepRange");
+const playMoveText = document.getElementById("playMoveText");
+
+const manualPourEl = document.getElementById("manualPour");
+const editAnyHiddenEl = document.getElementById("editAnyHidden");
+const restrictToPossibleEl = document.getElementById("restrictToPossible");
+
+let activeToken = PALETTE_ITEMS[0].token;
+let inputCells = [];
+let bottleHideCbs = [];
+let playTimer = null;
+
+let solutionStates = [];
+let solutionMoves = [];
+let currentStep = 0;
+
+let pendingReveal = null;     // { bottles:number[] }：頂層是 ? 的瓶子清單
+let pendingStartHidden = false; // ✅ 整理完停在這裡，等你按「開始處理 ?」
+let isBusy = false;
+
+/* 手動倒水 */
+let manualSelectedSrc = null;
+
+/* ====== inference state ====== */
+let inferenceData = null;
+let inferenceObs = new Map();
+let inferenceRemaining = [];
+let bestMoveReqId = 0;
+
+/* ====== misc UI helpers ====== */
+function showMsg(text, ok=true) {
+  msgEl.textContent = text;
+  msgEl.className = ok ? "ok" : "error";
+  msgEl.style.display = "block";
+}
+function clearMsg() { msgEl.textContent = ""; msgEl.style.display = "none"; }
+function showError(text) { errorEl.textContent = text; errorEl.style.display = "block"; }
+function clearError() { errorEl.textContent = ""; errorEl.style.display = "none"; }
+
+function updateContinueButton() {
+  if (pendingStartHidden) {
+    continueBtn.style.display = "inline-block";
+    continueBtn.textContent = "開始處理 ? 瓶子";
+    continueBtn.disabled = false;
+    return;
+  }
+  if (pendingReveal) {
+    continueBtn.style.display = "inline-block";
+    continueBtn.textContent = "繼續求解";
+    continueBtn.disabled = pendingReveal.bottles.length > 0;
+    return;
+  }
+  continueBtn.style.display = "none";
+  continueBtn.disabled = false;
+}
+
+/* ====== cell render ====== */
+function setCellToken(cell, token) {
+  const t = token || "";
+  cell.dataset.token = t;
+
+  if (t && isHiddenToken(t)) {
+    cell.classList.add("hidden");
+    cell.textContent = "?";
+    cell.style.background = "";
+    return;
+  }
+
+  cell.classList.remove("hidden");
+  cell.textContent = "";
+
+  if (!t) {
+    cell.style.background = "transparent";
+    return;
+  }
+  const col = TOKEN_TO_COLOR.get(t) || "#777";
+  cell.style.background = col;
+}
+
+/* ====== palette ====== */
+function buildPaletteInto(root, includeHidden=false) {
+  if (!root) return;
+  root.innerHTML = "";
+
+  const mk = (token, html, className="swatch") => {
+    const sw = document.createElement("div");
+    sw.className = className;
+    sw.dataset.token = token;
+    sw.innerHTML = html;
+    sw.addEventListener("click", () => setActiveToken(token));
+    root.appendChild(sw);
+  };
+
+  mk("", `<div class="dot"></div><div>空白(清除)</div>`, "swatch empty");
+
+  if (includeHidden) {
+    mk(
+      SPECIAL_HIDDEN,
+      `<div class="dot" style="background:repeating-linear-gradient(45deg,#f7f7f7,#f7f7f7 4px,#e9e9e9 4px,#e9e9e9 8px);"></div>
+       <div>?（未知）</div>`
+    );
+  }
+
+  for (const item of PALETTE_ITEMS) {
+    mk(
+      item.token,
+      `<div class="dot" style="background:${item.color}"></div>
+       <div>${item.name}<span class="small"> (${item.token})</span></div>`
+    );
+  }
+}
+function buildPalette() {
+  buildPaletteInto(paletteEl, true);
+  buildPaletteInto(palettePlayEl, false);
+  refreshPaletteActive();
+}
+function setActiveToken(token) {
+  activeToken = token;
+  refreshPaletteActive();
+}
+function refreshPaletteActive() {
+  const roots = [paletteEl, palettePlayEl].filter(Boolean);
+  for (const root of roots) {
+    root.querySelectorAll(".swatch").forEach(sw => {
+      sw.classList.toggle("active", (sw.dataset.token ?? "") === activeToken);
+    });
+  }
+}
+
+/* ====== build input board ====== */
+function setBottleHidden(bottleIdx, cap, on) {
+  if (cap <= 1) return;
+  for (let level = 0; level < cap - 1; level++) {
+    const cell = inputCells[bottleIdx][level];
+    if (!cell) continue;
+
+    if (on) {
+      cell.dataset.locked = "1";
+      cell.classList.add("readonly");
+      setCellToken(cell, makeHiddenToken(bottleIdx, level));
+    } else {
+      cell.dataset.locked = "0";
+      cell.classList.remove("readonly");
+      setCellToken(cell, "");
+    }
+  }
+  const topCell = inputCells[bottleIdx][cap - 1];
+  if (topCell) {
+    topCell.dataset.locked = "0";
+    topCell.classList.remove("readonly");
+  }
+}
+
+function buildInputBoard(n, cap) {
+  inputBoardEl.innerHTML = "";
+  inputCells = Array.from({length:n}, () => Array.from({length:cap}, () => null));
+  bottleHideCbs = Array.from({length:n}, () => null);
+
+  for (let i = 0; i < n; i++) {
+    const bottle = document.createElement("div");
+    bottle.className = "bottle";
+    bottle.dataset.idx = String(i);
+
+    const tube = document.createElement("div");
+    tube.className = "tube";
+
+    for (let level = 0; level < cap; level++) {
+      const cell = document.createElement("div");
+      cell.className = "cell";
+      cell.dataset.level = String(level);
+      cell.dataset.token = "";
+      cell.dataset.locked = "0";
+      cell.title = `瓶 ${i+1} / 第 ${level+1} 格（由底往上）`;
+
+      cell.addEventListener("click", () => {
+        if (cell.dataset.locked === "1") return;
+
+        if (activeToken === SPECIAL_HIDDEN) {
+          setCellToken(cell, makeHiddenToken(i, level));
+          return;
+        }
+
+        setCellToken(cell, activeToken);
+      });
+
+      inputCells[i][level] = cell;
+      tube.appendChild(cell);
+    }
+
+    const label = document.createElement("div");
+    label.className = "bottle-label";
+    label.textContent = `#${i+1}`;
+
+    const tools = document.createElement("div");
+    tools.className = "bottle-tools";
+    const cbLabel = document.createElement("label");
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.addEventListener("change", () => setBottleHidden(i, cap, cb.checked));
+    cbLabel.appendChild(cb);
+    cbLabel.appendChild(document.createTextNode("只顯示頂部"));
+    tools.appendChild(cbLabel);
+    bottleHideCbs[i] = cb;
+
+    bottle.appendChild(tube);
+    bottle.appendChild(label);
+    bottle.appendChild(tools);
+    inputBoardEl.appendChild(bottle);
+  }
+}
+
+function clearAllCells() {
+  for (let i = 0; i < bottleHideCbs.length; i++) {
+    if (bottleHideCbs[i]) bottleHideCbs[i].checked = false;
+  }
+  for (let i = 0; i < inputCells.length; i++) {
+    for (let lvl = 0; lvl < inputCells[i].length; lvl++) {
+      const cell = inputCells[i][lvl];
+      if (!cell) continue;
+      cell.dataset.locked = "0";
+      cell.classList.remove("readonly");
+      setCellToken(cell, "");
+    }
+  }
+}
+
+function readStateFromGrid() {
+  const n = Number(nBottlesEl.value);
+  const cap = Number(capEl.value);
+  if (!Number.isInteger(n) || n <= 0) throw new Error("n 必須是大於 0 的整數。");
+  if (!Number.isInteger(cap) || cap <= 0) throw new Error("容量必須是大於 0 的整數。");
+  if (!inputCells.length || inputCells.length !== n) throw new Error("請先建立水瓶。");
+
+  const state = [];
+  let hasHidden = false;
+  const counts = new Map();
+
+  for (let i = 0; i < n; i++) {
+    let seenEmpty = false;
+    const tube = [];
+
+    for (let level = 0; level < cap; level++) {
+      const token = inputCells[i][level].dataset.token || "";
+
+      if (token && isHiddenToken(token)) {
+        if (seenEmpty) throw new Error(`水瓶 ${i+1} 中間有空格又出現 ?。請從底部連續填起來，不要中間留空。`);
+        hasHidden = true;
+        tube.push(token);
+        continue;
+      }
+
+      if (!token) { seenEmpty = true; continue; }
+      if (seenEmpty) throw new Error(`水瓶 ${i+1} 中間有空格又出現顏色。請從底部連續填起來，不要中間留空。`);
+
+      tube.push(token);
+      counts.set(token, (counts.get(token)||0) + 1);
+    }
+
+    if (bottleHideCbs[i]?.checked && tube.length !== cap) {
+      throw new Error(`水瓶 ${i+1} 已勾選只顯示頂部，但頂部仍有空格。請把頂部也填色。`);
+    }
+
+    state.push(tube);
+  }
+
+  if (!hasHidden) {
+    for (const [tok, c] of counts.entries()) {
+      if (c % cap !== 0) {
+        throw new Error(`顏色 ${tok} 共有 ${c} 格，無法整除容量 ${cap}，通常代表此關卡不可能完成。`);
+      }
+    }
+  }
+
+  if (hasExposedHidden(state)) throw new Error("目前有隱藏格已在頂層（不合理），請檢查輸入。");
+
+  return { state, cap, hasHidden };
+}
+
+/* ====== apply move to state ====== */
+function applyMove(state, cap, move) {
+  const newState = state.map(t => t.slice());
+  const src = newState[move.src];
+  const dst = newState[move.dst];
+  const res = pour(src, dst, cap);
+  if (!res) throw new Error("重播/建狀態時發生不合法倒水");
+  newState[move.src] = res.newSrc;
+  newState[move.dst] = res.newDst;
+  return newState;
+}
+
+/* ====== steps list ====== */
+function renderStepsList(states, moves, cap) {
+  stepsListEl.innerHTML = "";
+  for (let i = 0; i < states.length; i++) {
+    const card = document.createElement("div");
+    card.className = "step-card";
+
+    const title = document.createElement("div");
+    title.className = "step-title";
+
+    if (i === 0) {
+      title.innerHTML = `Step 0 <span class="tag">初始</span>`;
+    } else {
+      const mv = moves[i-1];
+      title.innerHTML = `Step ${i} <span class="tag">#${mv.src+1} → #${mv.dst+1}（倒 ${mv.amt}）</span>`;
+    }
+
+    const jumpBtn = document.createElement("button");
+    jumpBtn.type = "button";
+    jumpBtn.textContent = "跳到這一步";
+    jumpBtn.addEventListener("click", () => setCurrentStep(i, true));
+
+    const boardWrap = document.createElement("div");
+    boardWrap.className = "board-wrap";
+    const board = document.createElement("div");
+    board.className = "board";
+    boardWrap.appendChild(board);
+
+    const highlight = (i === 0) ? null : moves[i-1];
+    renderBoard(board, states[i], cap, highlight);
+
+    card.appendChild(title);
+    card.appendChild(jumpBtn);
+    card.appendChild(boardWrap);
+
+    stepsListEl.appendChild(card);
+  }
+}
+
+/* ===========================
+   inference（保留原功能）
+=========================== */
+function sleep0() { return new Promise(r => setTimeout(r, 0)); }
+
+function materializePartialState(partialState, assignMap) {
+  return partialState.map(tube => tube.map(tok => isHiddenToken(tok) ? assignMap.get(tok) : tok));
+}
+function computePossibleByTok(vars, solutions) {
+  const m = new Map();
+  for (const tok of vars) m.set(tok, new Set());
+  for (const sol of solutions) {
+    for (const tok of vars) m.get(tok).add(sol.assign.get(tok));
+  }
+  return m;
+}
+function filterInferenceByObs() {
+  if (!inferenceData) return;
+  inferenceRemaining = inferenceData.solutions.filter(sol => {
+    for (const [tok, col] of inferenceObs.entries()) {
+      if (sol.assign.get(tok) !== col) return false;
+    }
+    return true;
+  });
+}
+function recordObservation(hiddenTok, color) {
+  if (!inferenceData) return;
+  if (!hiddenTok || !isHiddenToken(hiddenTok)) return;
+
+  if (restrictToPossibleEl?.checked) {
+    const base = inferenceRemaining.length ? inferenceRemaining : inferenceData.solutions;
+    let ok = false;
+    for (const sol of base) {
+      let pass = true;
+      for (const [t, v] of inferenceObs.entries()) {
+        if (sol.assign.get(t) !== v) { pass = false; break; }
+      }
+      if (!pass) continue;
+
+      if (sol.assign.get(hiddenTok) === color) { ok = true; break; }
+    }
+    if (!ok) {
+      showError(`這個 ? 不能選 ${color}：在目前推斷下會直接變成 0 個可行方案（必死）。`);
+      return false;
+    }
+  }
+
+  const prev = inferenceObs.get(hiddenTok);
+  if (prev && prev !== color) {
+    showError(`矛盾：這個 ? 之前已記錄為 ${prev}，你現在選的是 ${color}。若要改，請清空/重推斷。`);
+    return false;
+  }
+
+  inferenceObs.set(hiddenTok, color);
+  filterInferenceByObs();
+  renderInferenceFromRemaining();
+  scheduleComputeBestMove();
+  return true;
+}
+
+function countVisible(state, cap) {
+  const cnt = new Map();
+  let hiddenCount = 0;
+  let totalCells = 0;
+  for (const tube of state) {
+    totalCells += tube.length;
+    for (const tok of tube) {
+      if (isHiddenToken(tok)) hiddenCount++;
+      else cnt.set(tok, (cnt.get(tok)||0) + 1);
+    }
+  }
+  return { cnt, hiddenCount, totalCells };
+}
+function listHiddenTokens(state) {
+  const arr = [];
+  for (const tube of state) for (const tok of tube) if (isHiddenToken(tok)) arr.push(tok);
+  arr.sort((a,b)=>a.localeCompare(b));
+  return arr;
+}
+function materialize(state, assignMap) {
+  return state.map(tube => tube.map(tok => isHiddenToken(tok) ? assignMap.get(tok) : tok));
+}
+function* combinations(arr, k, start=0, prefix=[]) {
+  if (k === 0) { yield prefix.slice(); return; }
+  for (let i = start; i <= arr.length - k; i++) {
+    prefix.push(arr[i]);
+    yield* combinations(arr, k-1, i+1, prefix);
+    prefix.pop();
+  }
+}
+
+async function inferAllSolutions(baseState, cap, progressCb) {
+  const { cnt, hiddenCount, totalCells } = countVisible(baseState, cap);
+  const hiddenTokens = listHiddenTokens(baseState);
+
+  if (hiddenTokens.length !== hiddenCount) return { ok:false, reason:"隱藏格數量異常。" };
+  if (totalCells % cap !== 0) {
+    return { ok:false, reason:`總格數 ${totalCells} 無法整除容量 ${cap}，無法推斷每色=容量。` };
+  }
+
+  const totalTypes = totalCells / cap;
+
+  const visibleTypes = new Set([...cnt.keys()]);
+  if (visibleTypes.size > totalTypes) {
+    return { ok:false, reason:`可見顏色種類(${visibleTypes.size}) 大於應有種類(${totalTypes})，請檢查輸入。` };
+  }
+
+  const missingTypes = totalTypes - visibleTypes.size;
+  const zeroTypes = ALL_TOKENS.filter(t => !visibleTypes.has(t));
+
+  let typeSets = [];
+  if (missingTypes === 0) {
+    typeSets = [[...visibleTypes]];
+  } else {
+    for (const comb of combinations(zeroTypes, missingTypes)) {
+      typeSets.push([...visibleTypes, ...comb]);
+    }
+    if (!typeSets.length) {
+      return { ok:false, reason:`需要補 ${missingTypes} 種顏色，但色盤中沒有足夠未出現顏色可選。` };
+    }
+  }
+
+  const vars = hiddenTokens.slice();
+  const solutions = [];
+  let nodes = 0;
+  const MAX_SOLUTIONS = 10000000;
+
+  const solverOptsPrimary = {
+    maxExpansions: 2500000,
+    pruneEmptySym: pruneEmptySymEl.checked,
+    avoidReverse: avoidReverseEl.checked
+  };
+  const solverOptsRelax = {
+    maxExpansions: 4500000,
+    pruneEmptySym: false,
+    avoidReverse: false
+  };
+
+  const usedCandidateColors = new Set();
+
+  for (let tsIdx = 0; tsIdx < typeSets.length; tsIdx++) {
+    const typeSet = typeSets[tsIdx];
+
+    const remainNeed = new Map();
+    let totalNeed = 0;
+    for (const t of typeSet) {
+      const v = cnt.get(t) || 0;
+      if (v > cap) { totalNeed = -1; break; }
+      const need = cap - v;
+      remainNeed.set(t, need);
+      totalNeed += need;
+    }
+    if (totalNeed !== hiddenCount) continue;
+
+    const domain = typeSet.filter(t => (remainNeed.get(t)||0) > 0).sort();
+
+    const assign = new Map();
+
+    async function dfs(idx) {
+      nodes++;
+      if (nodes % 2500 === 0) {
+        if (progressCb) progressCb({ nodes, found: solutions.length, set: tsIdx+1, setTotal: typeSets.length });
+        await sleep0();
+      }
+      if (solutions.length >= MAX_SOLUTIONS) return;
+
+      if (idx === vars.length) {
+        const full = materialize(baseState, assign);
+
+        let res = solveAStar(full, cap, solverOptsPrimary);
+        if (!res.moves) res = solveAStar(full, cap, solverOptsRelax);
+
+        if (res.moves) {
+          solutions.push({
+            assign: new Map(assign),
+            fullState: full,
+            movesLen: res.moves.length,
+            expansions: res.expansions || 0,
+            typeSet: typeSet.slice()
+          });
+          for (const [k,v] of assign.entries()) usedCandidateColors.add(v);
+          if (progressCb) progressCb({ nodes, found: solutions.length, justFound:true, set: tsIdx+1, setTotal: typeSets.length });
+        }
+        return;
+      }
+
+      const tok = vars[idx];
+      const colors = domain.slice().sort((a,b)=>(remainNeed.get(b)||0)-(remainNeed.get(a)||0));
+
+      for (const col of colors) {
+        const r = remainNeed.get(col) || 0;
+        if (r <= 0) continue;
+
+        remainNeed.set(col, r - 1);
+        assign.set(tok, col);
+
+        await dfs(idx + 1);
+
+        assign.delete(tok);
+        remainNeed.set(col, r);
+
+        if (solutions.length >= MAX_SOLUTIONS) return;
+      }
+    }
+
+    await dfs(0);
+    if (solutions.length >= MAX_SOLUTIONS) break;
+  }
+
+  if (!solutions.length) {
+    return { ok:false, reason:"沒有找到任何可行方案（可能輸入不符合每色=容量，或此關無解）。" };
+  }
+
+  return {
+    ok:true,
+    baseState: baseState.map(t=>t.slice()),
+    vars,
+    solutions,
+    nodes,
+    truncated: solutions.length >= MAX_SOLUTIONS,
+    remainingCandidates: Array.from(usedCandidateColors).sort()
+  };
+}
+
+function renderInferenceFromRemaining() {
+  if (!inferenceData) return;
+
+  inferPanel.style.display = "block";
+  inferImpossibleEl.innerHTML = "";
+  inferSolutionsEl.innerHTML = "";
+
+  const sols = inferenceRemaining;
+  const vars = inferenceData.vars;
+  const domain = inferenceData.remainingCandidates;
+
+  const obsTxt = inferenceObs.size
+    ? `　｜　已觀測：${Array.from(inferenceObs.entries()).map(([k,v])=>{
+        const p = parseHiddenToken(k);
+        return `#${p.bottle+1}:${p.level+1}=${v}`;
+      }).join("，")}`
+    : "";
+
+  inferMeta.textContent =
+    `可行方案（符合目前觀測）數：${sols.length}${inferenceData.truncated ? "（推斷時已達顯示上限）" : ""}　｜　候選顏色（本次實際用到）：${domain.join(" ")}${obsTxt}`;
+
+  const possibleByTok = computePossibleByTok(vars, sols);
+  for (const tok of vars) {
+    const { bottle, level } = parseHiddenToken(tok);
+    const poss = Array.from(possibleByTok.get(tok) || []);
+    poss.sort();
+    const imposs = domain.filter(c => !possibleByTok.get(tok)?.has(c));
+
+    const card = document.createElement("div");
+    card.className = "infer-card";
+
+    const k = document.createElement("div");
+    k.className = "k";
+    k.textContent = `? 位置：水瓶 #${bottle+1} / 第 ${level+1} 格（由底）`;
+
+    const v = document.createElement("div");
+    v.className = "v";
+    v.textContent = `可能：${poss.join(" ")}　｜　不可能：${imposs.join(" ")}`;
+
+    card.appendChild(k);
+    card.appendChild(v);
+    inferImpossibleEl.appendChild(card);
+  }
+
+  sols.forEach((sol, idx) => {
+    const card = document.createElement("div");
+    card.className = "step-card";
+
+    const title = document.createElement("div");
+    title.className = "step-title";
+    title.innerHTML = `方案 ${idx+1} <span class="tag">可解步數：${sol.movesLen}｜展開：${(sol.expansions||0).toLocaleString()}</span>`;
+
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.textContent = "使用此方案並求解";
+    btn.addEventListener("click", () => {
+      clearError(); clearMsg();
+      runSolveFromFullState(sol.fullState, Number(capEl.value));
+      resultPanel.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+
+    const boardWrap = document.createElement("div");
+    boardWrap.className = "board-wrap";
+    const board = document.createElement("div");
+    board.className = "board";
+    boardWrap.appendChild(board);
+    renderBoard(board, sol.fullState, Number(capEl.value), null);
+
+    card.appendChild(title);
+    card.appendChild(btn);
+    card.appendChild(boardWrap);
+
+    inferSolutionsEl.appendChild(card);
+  });
+}
+
+/* ===========================
+   best move（保留）
+=========================== */
+function scheduleComputeBestMove() {
+  if (!inferenceData) return;
+  const myId = ++bestMoveReqId;
+
+  setTimeout(() => {
+    if (myId !== bestMoveReqId) return;
+    computeBestMoveFromRemaining().catch(err => {
+      bestMoveText.textContent = "（計算失敗）";
+      console.error(err);
+    });
+  }, 80);
+}
+
+async function computeBestMoveFromRemaining() {
+  if (!inferenceData) return;
+  const cap = Number(capEl.value);
+
+  bestMoveList.innerHTML = "";
+  bestMoveText.textContent = "";
+  if (bestMovePanel) bestMovePanel.style.display = "block";
+
+  if (!solutionStates.length) {
+    bestMoveText.textContent = "（請先按「求解」建立目前局面，或先推斷後再求解）";
+    return;
+  }
+  if (!inferenceRemaining.length) {
+    bestMoveText.textContent = "（目前沒有剩餘可行方案）";
+    return;
+  }
+
+  if (pendingReveal && pendingReveal.bottles.length > 0) {
+    bestMoveText.textContent = "（先把目前頂層 ? 補完，再推薦倒水會更準）";
+    return;
+  }
+
+  const partial = solutionStates[currentStep];
+
+  const optsPrimary = {
+    maxExpansions: 900000,
+    pruneEmptySym: pruneEmptySymEl.checked,
+    avoidReverse: avoidReverseEl.checked
+  };
+  const optsRelax = {
+    maxExpansions: 1600000,
+    pruneEmptySym: false,
+    avoidReverse: false
+  };
+
+  const counts = new Map();
+  let tried = 0;
+  let got = 0;
+
+  const total = inferenceRemaining.length;
+  const myId = bestMoveReqId;
+  bestMoveText.textContent = `計算中…(0/${total})`;
+
+  for (let i = 0; i < inferenceRemaining.length; i++) {
+    if (myId !== bestMoveReqId) return;
+
+    const sol = inferenceRemaining[i];
+    const mat = materializePartialState(partial, sol.assign);
+
+    let res = solveAStar(mat, cap, optsPrimary);
+    if (!res.moves) res = solveAStar(mat, cap, optsRelax);
+
+    tried++;
+    if (res.moves && res.moves.length > 0) {
+      got++;
+      const mv = res.moves[0];
+      const key = `${mv.src}|${mv.dst}`;
+      const rec = counts.get(key) || { cnt: 0, sumLen: 0, sampleMove: mv };
+      rec.cnt++;
+      rec.sumLen += res.moves.length;
+      rec.sampleMove = mv;
+      counts.set(key, rec);
+    }
+
+    if (i % 4 === 0) {
+      bestMoveText.textContent = `計算中…(${i+1}/${total})`;
+      await sleep0();
+    }
+  }
+
+  if (!counts.size) {
+    bestMoveText.textContent = `沒有算出可投票的下一步（成功 0/${tried}）。可能局面不穩或上限太小。`;
+    return;
+  }
+
+  const arr = Array.from(counts.values()).map(r => ({
+    ...r,
+    avgLen: r.sumLen / r.cnt
+  }));
+
+  arr.sort((a,b) => (b.cnt - a.cnt) || (a.avgLen - b.avgLen));
+
+  const best = arr[0];
+  const support = got ? (best.cnt / got) : 0;
+
+  bestMoveText.textContent =
+    `推薦：#${best.sampleMove.src+1} → #${best.sampleMove.dst+1}　｜　支持度：${best.cnt}/${got}（${(support*100).toFixed(1)}%）　｜　評估：${tried} 個方案`;
+
+  const topK = arr.slice(0, 6);
+  for (const r of topK) {
+    const card = document.createElement("div");
+    card.className = "infer-card";
+    const k = document.createElement("div");
+    k.className = "k";
+    k.textContent = `#${r.sampleMove.src+1} → #${r.sampleMove.dst+1}`;
+    const v = document.createElement("div");
+    v.className = "v";
+    v.textContent = `支持票數：${r.cnt}/${got}（${((r.cnt/got)*100).toFixed(1)}%）　｜　平均剩餘步數：約 ${r.avgLen.toFixed(1)}`;
+    card.appendChild(k);
+    card.appendChild(v);
+    bestMoveList.appendChild(card);
+  }
+}
+bestMoveBtn.addEventListener("click", () => {
+  if (bestMovePanel) bestMovePanel.style.display = "block";
+  if (!inferenceData) {
+    bestMoveText.textContent = "（請先按「推斷隱藏」）";
+    bestMoveList.innerHTML = "";
+    return;
+  }
+  scheduleComputeBestMove();
+});
+
+/* ===========================
+   ✅ 你在哪一步點 ? 補色，都「同步整條時間線」
+=========================== */
+function replaceHiddenAcrossTimeline(hiddenTok, color) {
+  for (const st of solutionStates) {
+    for (const tube of st) {
+      for (let k = 0; k < tube.length; k++) {
+        if (tube[k] === hiddenTok) tube[k] = color;
+      }
+    }
+  }
+}
+
+/* ===========================
+   render board（含：手動倒水）
+=========================== */
+function renderBoard(container, state, cap, highlightMove) {
+  const isPlay = (container === playBoardEl);
+
+  container.innerHTML = "";
+  for (let i = 0; i < state.length; i++) {
+    const bottle = document.createElement("div");
+    bottle.className = "bottle";
+
+    if (highlightMove) {
+      if (highlightMove.src === i) bottle.classList.add("hl-src");
+      if (highlightMove.dst === i) bottle.classList.add("hl-dst");
+    }
+
+    if (isPlay && manualPourEl?.checked && manualSelectedSrc === i) {
+      bottle.classList.add("sel-src");
+    }
+
+    const tube = document.createElement("div");
+    tube.className = "tube";
+
+    for (let level = 0; level < cap; level++) {
+      const cell = document.createElement("div");
+      cell.className = "cell readonly";
+      const token = (state[i] && state[i][level]) ? state[i][level] : "";
+      setCellToken(cell, token);
+
+      const allowRevealClick = isPlay && editAnyHiddenEl?.checked && isHiddenToken(token);
+
+      if (allowRevealClick) {
+        cell.classList.remove("readonly");
+        cell.classList.add("reveal-target");
+        cell.title = `補填：水瓶 #${i+1} 的 ?`;
+
+        cell.addEventListener("click", (ev) => {
+          ev.stopPropagation(); // 避免手動倒水點擊冒泡到 bottle
+          if (!activeToken || activeToken === "" || activeToken === SPECIAL_HIDDEN) {
+            showError("請先用快速選色選擇顏色（補填 ? 不可用空白/未知）。");
+            return;
+          }
+          const curTok = (state[i] && state[i][level]) ? state[i][level] : "";
+          if (!isHiddenToken(curTok)) return;
+
+          if (inferenceData && restrictToPossibleEl?.checked) {
+            const ok = recordObservation(curTok, activeToken);
+            if (!ok) return;
+          } else {
+            if (inferenceData) recordObservation(curTok, activeToken);
+          }
+
+          replaceHiddenAcrossTimeline(curTok, activeToken);
+
+          if (pendingReveal) {
+            const last = solutionStates[solutionStates.length - 1];
+            pendingReveal.bottles = getRevealBottles(last);
+          }
+
+          manualSelectedSrc = null;
+          clearError();
+          updatePlaybackUI();
+          updateContinueButton();
+        });
+      }
+
+      tube.appendChild(cell);
+    }
+
+    bottle.appendChild(tube);
+
+    const label = document.createElement("div");
+    label.className = "bottle-label";
+    label.textContent = `#${i+1}`;
+    bottle.appendChild(label);
+
+    if (isPlay && manualPourEl?.checked) {
+      bottle.style.cursor = "pointer";
+      bottle.title = "手動倒水：點來源瓶，再點目標瓶";
+
+      bottle.addEventListener("click", () => {
+        if (!solutionStates.length) return;
+
+        // 有待補頂層 ? 時，先補再動
+        if (pendingReveal && pendingReveal.bottles.length > 0) {
+          showError("目前有頂層 ? 需要先補色，補完再手動倒水。");
+          return;
+        }
+
+        // 只能在目前顯示的步驟手動操作
+        const cur = solutionStates[currentStep];
+
+        if (manualSelectedSrc === null) {
+          if (!cur[i].length) { showError("來源瓶是空的。"); return; }
+          if (isHiddenToken(topColor(cur[i]))) { showError("來源瓶頂層是 ?，不能倒。"); return; }
+          manualSelectedSrc = i;
+          clearError();
+          updatePlaybackUI();
+          return;
+        }
+
+        if (manualSelectedSrc === i) {
+          manualSelectedSrc = null;
+          clearError();
+          updatePlaybackUI();
+          return;
+        }
+
+        const src = manualSelectedSrc;
+        const dst = i;
+
+        if (!canPour(cur[src], cur[dst], cap)) {
+          showError("這個手動倒水不合法（顏色不符/目標滿/頂層是 ?）。");
+          return;
+        }
+
+        // 如果你在中間步驟手動，視為分支：截斷後面的時間線
+        if (currentStep !== solutionStates.length - 1) {
+          solutionStates = solutionStates.slice(0, currentStep + 1);
+          solutionMoves = solutionMoves.slice(0, currentStep);
+          pendingReveal = null;
+          pendingStartHidden = false; // 手動後就以你為準
+        }
+
+        const res = pour(cur[src], cur[dst], cap);
+        if (!res) { showError("倒水失敗（理論上不該發生）"); return; }
+
+        const mv = { type:"pour", src, dst, amt: res.amt };
+        const nxt = applyMove(cur, cap, mv);
+
+        solutionMoves.push(mv);
+        solutionStates.push(nxt);
+        currentStep = solutionStates.length - 1;
+
+        manualSelectedSrc = null;
+        clearError();
+        showMsg(`已手動倒水：#${src+1} → #${dst+1}（倒 ${mv.amt}）`, true);
+
+        refreshAllUI(cap);
+        if (inferenceData) scheduleComputeBestMove();
+      });
+    }
+
+    container.appendChild(bottle);
+  }
+}
+
+/* ===========================
+   playback
+=========================== */
+function updatePlaybackUI() {
+  const cap = Number(capEl.value);
+  stepLabel.textContent = `Step ${currentStep}`;
+  stepRange.value = String(currentStep);
+
+  let text = "初始狀態";
+  let highlight = null;
+
+  if (currentStep > 0) {
+    const mv = solutionMoves[currentStep - 1];
+    highlight = mv;
+    text = `本步：#${mv.src+1} → #${mv.dst+1}（倒 ${mv.amt}）`;
+  }
+
+  if (pendingStartHidden && currentStep === solutionStates.length - 1) {
+    text = "整理階段已完成（未處理含 ? 的瓶子）。你可以手動倒水/推斷，或按「開始處理 ? 瓶子」。";
+  }
+
+  if (pendingReveal && currentStep === solutionStates.length - 1) {
+    if (pendingReveal.bottles.length > 0) {
+      const need = pendingReveal.bottles.map(i => `#${i+1}`).join("、");
+      text = `需要補填：水瓶 ${need} 的頂層是 ?。點 ? 補完再按「繼續求解」。`;
+    } else {
+      text = `已補完本次所有頂層 ?，請按「繼續求解」。`;
+    }
+  }
+
+  playMoveText.textContent = text;
+  renderBoard(playBoardEl, solutionStates[currentStep], cap, highlight);
+  updateContinueButton();
+}
+
+function setCurrentStep(step, stopPlay=false) {
+  currentStep = Math.max(0, Math.min(step, solutionStates.length - 1));
+  manualSelectedSrc = null;
+  if (stopPlay) stopAutoPlay();
+  updatePlaybackUI();
+  if (inferenceData) scheduleComputeBestMove();
+}
+function stopAutoPlay() {
+  if (playTimer) {
+    clearInterval(playTimer);
+    playTimer = null;
+  }
+  playBtn.textContent = "播放";
+}
+function startAutoPlay() {
+  if (pendingReveal && pendingReveal.bottles.length > 0) return;
+  stopAutoPlay();
+  playBtn.textContent = "暫停";
+  playTimer = setInterval(() => {
+    if (currentStep >= solutionStates.length - 1) {
+      stopAutoPlay();
+      return;
+    }
+    setCurrentStep(currentStep + 1, false);
+  }, 450);
+}
+
+/* ===========================
+   staged solving (hidden-aware)
+=========================== */
+function getRevealBottles(state) {
+  const arr = [];
+  for (let i = 0; i < state.length; i++) {
+    const tube = state[i];
+    if (!tube.length) continue;
+    if (isHiddenToken(tube[tube.length - 1])) arr.push(i);
+  }
+  return arr;
+}
+
+function runOneStageSolve(fromState, cap) {
+  const opts1 = {
+    maxExpansions: 1200000,
+    pruneEmptySym: pruneEmptySymEl.checked,
+    avoidReverse: avoidReverseEl.checked
+  };
+  const opts2 = {
+    maxExpansions: 3200000,
+    pruneEmptySym: false,
+    avoidReverse: false
+  };
+
+  if (!stateHasHidden(fromState)) {
+    let res = solveAStar(fromState, cap, opts1);
+    if (!res.moves) res = solveAStar(fromState, cap, opts2);
+    return { kind:"final", res };
+  }
+
+  const goalFn = (s, c) => isSolved(s, c) || hasExposedHidden(s);
+  const hFn = () => 0;
+  let res = solveAStarGoal(fromState, cap, opts1, goalFn, hFn);
+  if (!res.moves) res = solveAStarGoal(fromState, cap, opts2, goalFn, hFn);
+  return { kind:"toReveal", res };
+}
+
+function appendMovesAndStates(fromState, cap, moves) {
+  let cur = fromState;
+  for (const mv of moves) {
+    const nxt = applyMove(cur, cap, mv);
+    solutionMoves.push(mv);
+    solutionStates.push(nxt);
+    cur = nxt;
+  }
+  return cur;
+}
+
+function refreshAllUI(cap) {
+  stepRange.min = "0";
+  stepRange.max = String(solutionStates.length - 1);
+  if (currentStep > solutionStates.length - 1) currentStep = solutionStates.length - 1;
+
+  updatePlaybackUI();
+  renderStepsList(solutionStates, solutionMoves, cap);
+
+  const status = pendingStartHidden
+    ? "整理完（等待你開始處理 ?）"
+    : (pendingReveal ? (pendingReveal.bottles.length ? "等待補填頂層 ?" : "可繼續求解") : "求解中/已完成");
+
+  resultMeta.textContent = `步數：${solutionMoves.length}　｜　${status}`;
+}
+
+function solveUntilStop(cap) {
+  const curState = solutionStates[solutionStates.length - 1];
+  if (pendingReveal && pendingReveal.bottles.length > 0) return;
+
+  const stage = runOneStageSolve(curState, cap);
+  const res = stage.res;
+
+  if (!res.moves) {
+    showMsg(`無解或超過限制：${res.reason || "未知原因"}`, false);
+    return;
+  }
+
+  const endState = appendMovesAndStates(curState, cap, res.moves);
+
+  if (isSolved(endState, cap)) {
+    pendingReveal = null;
+    refreshAllUI(cap);
+    showMsg(`完成！共 ${solutionMoves.length} 步。`, true);
+    return;
+  }
+
+  const revealBottles = getRevealBottles(endState);
+  if (revealBottles.length) {
+    pendingReveal = { bottles: revealBottles };
+    stopAutoPlay();
+    currentStep = solutionStates.length - 1;
+    refreshAllUI(cap);
+    showMsg(`已推進到需要補填的位置：請把頂層 ? 補完再按「繼續求解」。`, true);
+    scheduleComputeBestMove();
+    return;
+  }
+
+  refreshAllUI(cap);
+  showMsg(`已停止：沒有完成也沒有露出隱藏格，可能需要調整剪枝/上限。`, false);
+}
+
+/* ====== 直接用完整狀態求解（不再有 ?） ====== */
+function runSolveFromFullState(fullState, cap) {
+  pendingReveal = null;
+  pendingStartHidden = false;
+  solutionMoves = [];
+  solutionStates = [fullState.map(t => t.slice())];
+  currentStep = 0;
+  refreshAllUI(cap);
+
+  showMsg("求解中…", true);
+  setTimeout(() => {
+    const opts1 = {
+      maxExpansions: 2500000,
+      pruneEmptySym: pruneEmptySymEl.checked,
+      avoidReverse: avoidReverseEl.checked
+    };
+    const opts2 = {
+      maxExpansions: 4500000,
+      pruneEmptySym: false,
+      avoidReverse: false
+    };
+
+    let res = solveAStar(fullState, cap, opts1);
+    if (!res.moves) res = solveAStar(fullState, cap, opts2);
+
+    if (!res.moves) {
+      showMsg(`無解或超過限制：${res.reason || "未知原因"}`, false);
+      return;
+    }
+    let cur = solutionStates[0];
+    for (const mv of res.moves) {
+      const nxt = applyMove(cur, cap, mv);
+      solutionMoves.push(mv);
+      solutionStates.push(nxt);
+      cur = nxt;
+    }
+    pendingReveal = null;
+    pendingStartHidden = false;
+    currentStep = 0;
+    refreshAllUI(cap);
+    showMsg(`完成！共 ${solutionMoves.length} 步。`, true);
+    resultMeta.textContent =
+      `步數：${solutionMoves.length}　｜　展開節點：${(res.expansions||0).toLocaleString()}`;
+  }, 0);
+}
+
+/* ===========================
+   events
+=========================== */
+buildBtn.addEventListener("click", () => {
+  clearError(); clearMsg();
+  resultPanel.style.display = "none";
+  inferPanel.style.display = "none";
+
+  const n = Number(nBottlesEl.value);
+  const cap = Number(capEl.value);
+  if (!Number.isInteger(n) || n <= 0) { showError("n 必須是大於 0 的整數。"); return; }
+  if (!Number.isInteger(cap) || cap <= 0) { showError("容量必須是大於 0 的整數。"); return; }
+
+  buildPalette();
+  setActiveToken(PALETTE_ITEMS[0].token);
+  buildInputBoard(n, cap);
+  inputsPanel.style.display = "block";
+});
+
+clearBtn.addEventListener("click", () => {
+  clearError(); clearMsg();
+  stopAutoPlay();
+  isBusy = false;
+
+  pendingReveal = null;
+  pendingStartHidden = false;
+  solutionMoves = [];
+  solutionStates = [];
+  currentStep = 0;
+
+  manualSelectedSrc = null;
+
+  inferenceData = null;
+  inferenceObs.clear();
+  inferenceRemaining = [];
+  bestMoveText.textContent = "";
+  bestMoveList.innerHTML = "";
+  inferPanel.style.display = "none";
+  inferMeta.textContent = "";
+  inferImpossibleEl.innerHTML = "";
+  inferSolutionsEl.innerHTML = "";
+
+  clearAllCells();
+  resultPanel.style.display = "none";
+  if (bestMovePanel) bestMovePanel.style.display = "none";
+});
+
+loadExampleBtn.addEventListener("click", () => {
+  clearError(); clearMsg();
+  stopAutoPlay();
+
+  inferenceData = null;
+  inferenceObs.clear();
+  inferenceRemaining = [];
+  bestMoveText.textContent = "";
+  bestMoveList.innerHTML = "";
+  inferPanel.style.display = "none";
+  inferMeta.textContent = "";
+  inferImpossibleEl.innerHTML = "";
+  inferSolutionsEl.innerHTML = "";
+
+  nBottlesEl.value = 5;
+  capEl.value = 4;
+  buildPalette();
+  setActiveToken("P");
+  buildInputBoard(5, 4);
+  inputsPanel.style.display = "block";
+
+  const ex = [
+    ["P","B","G","G"],
+    ["B","P","G","B"],
+    ["P","B","P","G"],
+    [],
+    []
+  ];
+  for (let i = 0; i < ex.length; i++) {
+    for (let lvl = 0; lvl < 4; lvl++) {
+      const token = ex[i][lvl] || "";
+      setCellToken(inputCells[i][lvl], token);
+    }
+  }
+
+  bottleHideCbs[0].checked = true;
+  setBottleHidden(0, 4, true);
+  setCellToken(inputCells[0][3], "G");
+
+  setActiveToken(SPECIAL_HIDDEN);
+  setCellToken(inputCells[1][1], makeHiddenToken(1,1));
+  setActiveToken("P");
+});
+
+solveBtn.addEventListener("click", () => {
+  clearError(); clearMsg();
+  stopAutoPlay();
+  resultPanel.style.display = "none";
+  if (isBusy) return;
+
+  showMsg("計算中…", true);
+
+  setTimeout(() => {
+    try {
+      const { state, cap, hasHidden } = readStateFromGrid();
+
+      pendingReveal = null;
+      pendingStartHidden = false;
+      manualSelectedSrc = null;
+
+      solutionMoves = [];
+      solutionStates = [cloneState(state)];
+      currentStep = 0;
+
+      // ✅ 先整理「完全已知」瓶子（不碰含 ?）
+      if (preArrangeKnownEl?.checked) {
+        const pre = preArrangeKnown(solutionStates[0], cap, {
+          maxSteps: 260,
+          avoidReverse: avoidReverseEl.checked,
+          randomPick: true
+        });
+        if (pre.moves.length) {
+          appendMovesAndStates(solutionStates[0], cap, pre.moves);
+        }
+      }
+
+      resultPanel.style.display = "block";
+      refreshAllUI(cap);
+
+      if (!hasHidden) {
+        // 沒有 ?：直接解到底
+        showMsg("無隱藏格，直接求解中…", true);
+        pendingStartHidden = false;
+        solveUntilStop(cap);
+        refreshAllUI(cap);
+        return;
+      }
+
+      // ✅ 有 ?：預設停下來（不自動碰含 ?）
+      if (autoSolveHiddenEl?.checked) {
+        showMsg("整理完成，開始處理含 ? 的瓶子…", true);
+        pendingStartHidden = false;
+        solveUntilStop(cap);
+      } else {
+        pendingStartHidden = true;
+        showMsg("整理完成：尚未處理含 ? 的瓶子。你可以手動倒水/推斷，或按「開始處理 ? 瓶子」。", true);
+      }
+
+      refreshAllUI(cap);
+      if (inferenceData) scheduleComputeBestMove();
+
+    } catch (e) {
+      showError(e.message || String(e));
+      clearMsg();
+    }
+  }, 0);
+});
+
+continueBtn.addEventListener("click", () => {
+  clearError(); clearMsg();
+  stopAutoPlay();
+
+  const cap = Number(capEl.value);
+
+  if (pendingStartHidden) {
+    pendingStartHidden = false;
+    showMsg("開始處理含 ? 的瓶子…", true);
+    refreshAllUI(cap);
+    solveUntilStop(cap);
+    refreshAllUI(cap);
+    scheduleComputeBestMove();
+    return;
+  }
+
+  if (!pendingReveal) return;
+
+  if (pendingReveal.bottles.length > 0) {
+    showError(`還沒補完：水瓶 ${pendingReveal.bottles.map(i=>`#${i+1}`).join("、")} 的頂層仍是 ?。`);
+    return;
+  }
+
+  const beforeLen = solutionStates.length;
+  pendingReveal = null;
+  updateContinueButton();
+
+  solveUntilStop(cap);
+
+  if (solutionStates.length > beforeLen) {
+    setCurrentStep(beforeLen, true);
+  } else {
+    setCurrentStep(solutionStates.length - 1, true);
+  }
+
+  scheduleComputeBestMove();
+});
+
+inferBtn.addEventListener("click", async () => {
+  clearError(); clearMsg();
+  stopAutoPlay();
+  if (isBusy) return;
+
+  try {
+    const { state, cap, hasHidden } = readStateFromGrid();
+    if (!hasHidden) {
+      showError("目前沒有隱藏格（?），不需要推斷。");
+      return;
+    }
+
+    resultPanel.style.display = "block";
+    inferPanel.style.display = "block";
+    inferMeta.textContent = "";
+    inferImpossibleEl.innerHTML = "";
+    inferSolutionsEl.innerHTML = "";
+    bestMoveText.textContent = "";
+    bestMoveList.innerHTML = "";
+
+    inferenceData = null;
+    inferenceObs.clear();
+    inferenceRemaining = [];
+
+    isBusy = true;
+    showMsg("推斷中（會比較久）…", true);
+
+    const t0 = performance.now();
+    const inf = await inferAllSolutions(state, cap, (p) => {
+      if (!p) return;
+      const setInfo = (p.setTotal ? `｜集合 ${p.set}/${p.setTotal}` : "");
+      if (p.justFound) {
+        showMsg(`推斷中…已找到 ${p.found} 個可行方案（節點 ${p.nodes.toLocaleString()}${setInfo}）`, true);
+      } else {
+        showMsg(`推斷中…節點 ${p.nodes.toLocaleString()}｜已找到 ${p.found}${setInfo}`, true);
+      }
+    });
+    const t1 = performance.now();
+
+    isBusy = false;
+
+    if (!inf.ok) {
+      showMsg("推斷失敗", false);
+      showError(inf.reason || "未知原因");
+      return;
+    }
+
+    inferenceData = inf;
+    if (bestMovePanel) bestMovePanel.style.display = "block";
+    inferenceRemaining = inf.solutions.slice();
+
+    showMsg(`推斷完成！共找到 ${inf.solutions.length} 個可行方案（耗時 ${(t1-t0).toFixed(0)} ms）`, true);
+    renderInferenceFromRemaining();
+    scheduleComputeBestMove();
+
+  } catch (e) {
+    isBusy = false;
+    showError(e.message || String(e));
+    clearMsg();
+  }
+});
+
+prevBtn.addEventListener("click", () => setCurrentStep(currentStep - 1, true));
+nextBtn.addEventListener("click", () => setCurrentStep(currentStep + 1, true));
+playBtn.addEventListener("click", () => {
+  if (!solutionStates.length) return;
+  if (pendingReveal && pendingReveal.bottles.length > 0) return;
+  if (playTimer) stopAutoPlay();
+  else startAutoPlay();
+});
+stepRange.addEventListener("input", () => setCurrentStep(Number(stepRange.value), true));
+
+manualPourEl.addEventListener("change", () => {
+  manualSelectedSrc = null;
+  updatePlaybackUI();
+});
+
+/* ====== 初始建立 ====== */
+(() => {
+  const n = Number(nBottlesEl.value) || 5;
+  const cap = Number(capEl.value) || 4;
+  buildPalette();
+  setActiveToken(PALETTE_ITEMS[0].token);
+  buildInputBoard(n, cap);
+  inputsPanel.style.display = "block";
+})();
+</script>
+</body>
+</html>
